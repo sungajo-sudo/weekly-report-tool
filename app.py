@@ -10,6 +10,8 @@ import re
 import json
 import os
 from datetime import datetime
+import gdown
+import tempfile
 
 # --- 1. 초기 세팅 및 데이터 저장 파일 설정 ---
 st.set_page_config(page_title="Weekly Report Smart Converter", layout="wide")
@@ -55,7 +57,13 @@ def process_report_data(file):
     try:
         this_week_raw_list, next_week_raw_list = [], []
         
-        if file.name.endswith('.pdf'):
+        # 파일 이름 확인 (구글 드라이브에서 가져온 경우)
+        file_name = getattr(file, 'name', 'unknown')
+        if not hasattr(file, 'read'):
+            # 파일 경로인 경우
+            file_name = file if isinstance(file, str) else 'unknown'
+        
+        if file_name.endswith('.pdf'):
             with pdfplumber.open(file) as pdf:
                 for page in pdf.pages:
                     table = page.extract_table()
@@ -159,7 +167,62 @@ menu = st.sidebar.radio("이동할 페이지:", ["새 보고서 만들기", "변
 
 if menu == "새 보고서 만들기":
     st.title("🚀 주간보고 스마트 PPT 변환기")
-    file = st.file_uploader("Excel 또는 PDF 파일을 업로드하세요", type=["xlsx", "pdf"])
+    
+    # 파일 가져오기 방법 선택
+    input_method = st.radio(
+        "파일 가져오기 방법:",
+        ["로컬 파일 업로드", "구글 드라이브 링크"],
+        horizontal=True
+    )
+    
+    file = None
+    file_name = None
+    temp_file_path = None
+    
+    if input_method == "로컬 파일 업로드":
+        file = st.file_uploader("Excel 또는 PDF 파일을 업로드하세요", type=["xlsx", "pdf"])
+        if file:
+            file_name = file.name
+    
+    elif input_method == "구글 드라이브 링크":
+        drive_link = st.text_input(
+            "구글 드라이브 공유 링크를 입력하세요",
+            placeholder="https://drive.google.com/file/d/FILE_ID/view?usp=sharing"
+        )
+        
+        if drive_link:
+            try:
+                # 구글 드라이브 링크에서 파일 ID 추출
+                file_id = None
+                if '/file/d/' in drive_link:
+                    file_id = drive_link.split('/file/d/')[1].split('/')[0]
+                elif 'id=' in drive_link:
+                    file_id = drive_link.split('id=')[1].split('&')[0]
+                
+                if file_id:
+                    # 다운로드 URL 생성
+                    download_url = f"https://drive.google.com/uc?id={file_id}"
+                    
+                    with st.spinner("구글 드라이브에서 파일 다운로드 중..."):
+                        # 파일 확장자 확인 (기본값은 xlsx)
+                        is_pdf = '.pdf' in drive_link.lower()
+                        suffix = '.pdf' if is_pdf else '.xlsx'
+                        
+                        # 임시 파일로 다운로드
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                            gdown.download(download_url, tmp_file.name, quiet=False)
+                            temp_file_path = tmp_file.name
+                            file_name = f"drive_file{suffix}"
+                            
+                            # 파일 객체로 열기
+                            file = open(temp_file_path, 'rb')
+                    
+                    st.success("✅ 구글 드라이브에서 파일을 성공적으로 가져왔습니다!")
+                else:
+                    st.error("❌ 올바른 구글 드라이브 링크 형식이 아닙니다.")
+            except Exception as e:
+                st.error(f"❌ 구글 드라이브에서 파일을 가져오는 중 오류가 발생했습니다: {e}")
+                st.info("💡 링크가 '모든 사용자가 링크로 접근 가능'으로 설정되어 있는지 확인해주세요.")
 
     if file:
         with st.spinner("데이터 분석 중..."):
@@ -175,7 +238,7 @@ if menu == "새 보고서 만들기":
                     if st.button("💾 히스토리에 저장"):
                         history_item = {
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "filename": file.name,
+                            "filename": file_name or "unknown",
                             "data": final_df.to_dict('records')
                         }
                         st.session_state['history'].insert(0, history_item)
@@ -186,9 +249,17 @@ if menu == "새 보고서 만들기":
                     st.download_button(
                         label="📥 PPT 다운로드",
                         data=ppt_binary,
-                        file_name=f"주간보고_정제본_{file.name.split('.')[0]}.pptx",
+                        file_name=f"주간보고_정제본_{file_name.split('.')[0] if file_name else 'report'}.pptx",
                         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
                     )
+                
+                # 임시 파일 정리
+                if temp_file_path and os.path.exists(temp_file_path):
+                    try:
+                        file.close()
+                        os.unlink(temp_file_path)
+                    except:
+                        pass
 
 elif menu == "변환 히스토리":
     st.title("📜 변환 히스토리")
