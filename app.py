@@ -7,13 +7,32 @@ from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
 import io
 import re
+import json
+import os
 from datetime import datetime
 
-# --- 1. 초기 세팅 및 상태 관리 ---
-st.set_page_config(page_title="Weekly Report Smart Converter", layout="wide")
+# --- 1. 초기 세팅 및 데이터 저장 파일 설정 ---
+st.set_page_config(page_title="Weekly Report Persistent Converter", layout="wide")
+HISTORY_FILE = "history_data.json"
 
+# 파일에서 히스토리 불러오기 함수
+def load_history_from_file():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+# 파일에 히스토리 저장하기 함수
+def save_history_to_file(history):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+# 세션 상태 초기화
 if 'history' not in st.session_state:
-    st.session_state['history'] = []
+    st.session_state['history'] = load_history_from_file()
 
 # --- 2. 텍스트 간결화 및 중복 제거 함수 ---
 def refine_text(text):
@@ -23,7 +42,6 @@ def refine_text(text):
     seen = set()
     for line in lines:
         line = line.strip().replace('•', '').strip()
-        # 문구 간결화 로직
         line = re.sub(r' 진행 중(입니다)?', ' 진행', line)
         line = re.sub(r' 완료(하였습니다|했습니다)?', ' 완료', line)
         line = re.sub(r' 예정(입니다)?', ' 예정', line)
@@ -72,7 +90,7 @@ def process_report_data(file):
         st.error(f"데이터 처리 오류: {e}")
         return None
 
-# --- 4. PPT 생성 함수 (페이지 분할 포함) ---
+# --- 4. PPT 생성 함수 ---
 def create_split_pptx(df):
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(13.33), Inches(7.5)
@@ -106,57 +124,62 @@ def create_split_pptx(df):
     prs.save(ppt_io)
     return ppt_io.getvalue()
 
-# --- 5. 사이드바 메뉴 구성 ---
+# --- 5. 사이드바 메뉴 ---
 st.sidebar.title("📌 메뉴")
 menu = st.sidebar.radio("이동할 페이지를 선택하세요:", ["새 보고서 만들기", "변환 히스토리"])
 
-# --- 6. 페이지별 화면 구성 ---
+# --- 6. 페이지별 화면 ---
 if menu == "새 보고서 만들기":
     st.title("🚀 주간보고 스마트 PPT 변환기")
-    st.markdown("내용을 **간결하게 요약**하고, 양이 많으면 **슬라이드를 자동으로 분할**합니다.")
     file = st.file_uploader("Excel 또는 PDF 파일을 업로드하세요", type=["xlsx", "pdf"])
 
     if file:
-        with st.spinner("데이터 분석 및 정제 중..."):
-            final_df = process_report_data(file)
-            if final_df is not None:
-                st.subheader("✅ 정제된 데이터 미리보기")
-                st.dataframe(final_df, use_container_width=True)
-                
-                ppt_binary = create_split_pptx(final_df)
-                
-                # 히스토리에 저장
-                if st.button("💾 히스토리에 저장 및 PPT 생성"):
-                    history_item = {
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "filename": file.name,
-                        "data": final_df,
-                        "ppt": ppt_binary
-                    }
-                    st.session_state['history'].insert(0, history_item)
-                    st.success("히스토리에 저장되었습니다! 아래 버튼으로 다운로드하세요.")
-                
-                st.download_button(
-                    label="📥 정제된 PPT 다운로드",
-                    data=ppt_binary,
-                    file_name=f"주간보고_정제본_{file.name.split('.')[0]}.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                )
+        final_df = process_report_data(file)
+        if final_df is not None:
+            st.subheader("✅ 정제된 데이터 미리보기")
+            st.dataframe(final_df, use_container_width=True)
+            
+            if st.button("💾 히스토리에 저장 및 PPT 생성"):
+                # 히스토리에 저장 (데이터프레임을 dict로 변환하여 저장)
+                history_item = {
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "filename": file.name,
+                    "data": final_df.to_dict('records') # JSON 저장을 위해 리스트로 변환
+                }
+                st.session_state['history'].insert(0, history_item)
+                save_history_to_file(st.session_state['history']) # 파일에 즉시 저장
+                st.success("기록이 컴퓨터에 저장되었습니다!")
+
+            ppt_binary = create_split_pptx(final_df)
+            st.download_button(
+                label="📥 정제된 PPT 다운로드",
+                data=ppt_binary,
+                file_name=f"주간보고_정제본_{file.name.split('.')[0]}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
 
 elif menu == "변환 히스토리":
-    st.title("📜 변환 히스토리")
+    st.title("📜 변환 히스토리 (영구 보관)")
     if not st.session_state['history']:
-        st.info("아직 저장된 이력이 없습니다. '새 보고서 만들기'에서 먼저 변환을 진행해주세요.")
+        st.info("저장된 이력이 없습니다.")
     else:
         for idx, item in enumerate(st.session_state['history']):
             with st.expander(f"📅 {item['date']} - 📄 {item['filename']}"):
-                st.dataframe(item['data'], use_container_width=True)
+                # 저장된 데이터를 다시 데이터프레임으로 복구
+                hist_df = pd.DataFrame(item['data'])
+                st.dataframe(hist_df, use_container_width=True)
+                
+                # 히스토리에서 바로 PPT 생성하여 다운로드
+                ppt_from_hist = create_split_pptx(hist_df)
                 st.download_button(
                     label=f"📥 {item['filename']} PPT 다시 받기",
-                    data=item['ppt'],
+                    data=ppt_from_hist,
                     file_name=f"RE_{item['filename'].split('.')[0]}.pptx",
                     key=f"history_dl_{idx}"
                 )
+        
         if st.button("🗑️ 히스토리 전체 삭제"):
+            if os.path.exists(HISTORY_FILE):
+                os.remove(HISTORY_FILE)
             st.session_state['history'] = []
             st.rerun()
