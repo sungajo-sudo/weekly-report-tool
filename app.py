@@ -70,7 +70,7 @@ def process_report_data(file):
     res_next = summarize(next_week)
     
     merged = pd.merge(res_this, res_next, on='프로젝트', how='outer', suffixes=('_금', '_차')).fillna("-")
-    merged.columns = ['프로젝트명', '이번 주 업무내용', '다음 주 업무내용']
+    merged.columns = ['프로젝트명', '지난 주 진행(MM월 YY주차)', '금주 계획(MM월 YY주차)']
     return merged.sort_values('프로젝트명')
 
 # --- 3. PPT 생성 함수 (자동 페이지 분할 기능 포함) ---
