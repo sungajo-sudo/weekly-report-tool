@@ -69,7 +69,6 @@ def process_report_data(file):
                             h_idx = i; break
                     if h_idx != -1:
                         for _, r in df_tmp.iloc[h_idx+1:].iterrows():
-                            # PDF 구조: 좌측(0,1,2), 우측(4,5,6)
                             if len(r) >= 3 and r[1] and r[2]: this_week_raw_list.append([r[0], r[1], r[2]])
                             if len(r) >= 7 and r[5] and r[6]: next_week_raw_list.append([r[4], r[5], r[6]])
         else:
@@ -87,11 +86,8 @@ def process_report_data(file):
             
             data_df = df_raw.iloc[h_idx + 1:].copy()
             for _, r in data_df.iterrows():
-                # 엑셀 데이터 추출 (병렬 구조 대응)
-                # 이번주 데이터 (0~2열)
                 if len(r) >= 3 and pd.notna(r[1]) and str(r[1]).strip() != '':
                     this_week_raw_list.append([r[0], r[1], r[2]])
-                # 다음주 데이터 (4~6열)
                 if len(r) >= 7 and pd.notna(r[5]) and str(r[5]).strip() != '':
                     next_week_raw_list.append([r[4], r[5], r[6]])
 
@@ -99,9 +95,7 @@ def process_report_data(file):
             if not rows: return pd.DataFrame(columns=['프로젝트', '내용'])
             df = pd.DataFrame(rows, columns=['팀원', '프로젝트', '내용'])
             df['프로젝트'] = df['프로젝트'].astype(str).str.strip()
-            # 헤더 텍스트가 데이터로 들어간 경우 제외
             df = df[~df['프로젝트'].str.contains('프로젝트|팀원|nan', case=False, na=False)]
-            # 프로젝트별 그룹화 및 텍스트 정제
             grouped = df.groupby('프로젝트')['내용'].apply(lambda x: refine_text("\n".join(map(str, x)))).reset_index()
             return grouped
 
@@ -109,7 +103,7 @@ def process_report_data(file):
         res_next = summarize(next_week_raw_list)
         
         if res_this.empty and res_next.empty:
-            st.warning("추출된 데이터가 없습니다. 파일의 열 순서(프로젝트명이 2번째/6번째 열인지)를 확인해 주세요.")
+            st.warning("추출된 데이터가 없습니다. 파일 양식을 확인해 주세요.")
             return None
 
         merged = pd.merge(res_this, res_next, on='프로젝트', how='outer', suffixes=('_금', '_차')).fillna("-")
@@ -117,7 +111,7 @@ def process_report_data(file):
         return merged.sort_values('프로젝트명')
 
     except Exception as e:
-        st.error(f"파일 분석 중 오류가 발생했습니다: {e}")
+        st.error(f"파일 분석 중 오류: {e}")
         return None
 
 # --- 4. PPT 생성 함수 ---
@@ -129,16 +123,13 @@ def create_split_pptx(df):
     for i in range(0, len(df), ROWS_PER_PAGE):
         chunk = df.iloc[i : i + ROWS_PER_PAGE]
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        
         title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
         p = title_box.text_frame.add_paragraph()
         p.text = f"서비스기획팀 주간업무보고 ({i//ROWS_PER_PAGE + 1})"
         p.font.bold, p.font.size = True, Pt(28)
 
         table = slide.shapes.add_table(len(chunk) + 1, 3, Inches(0.5), Inches(1.3), Inches(12.3), Inches(0.8)).table
-        table.columns[0].width = Inches(2.3)
-        table.columns[1].width = Inches(5.0)
-        table.columns[2].width = Inches(5.0)
+        table.columns[0].width, table.columns[1].width, table.columns[2].width = Inches(2.3), Inches(5.0), Inches(5.0)
 
         headers = ["프로젝트명", "이번 주 업무내용", "다음 주 업무내용"]
         for j, h in enumerate(headers):
@@ -171,7 +162,7 @@ if menu == "새 보고서 만들기":
     file = st.file_uploader("Excel 또는 PDF 파일을 업로드하세요", type=["xlsx", "pdf"])
 
     if file:
-        with st.spinner("데이터를 분석하고 있습니다..."):
+        with st.spinner("데이터 분석 중..."):
             final_df = process_report_data(file)
             if final_df is not None:
                 st.subheader("✅ 정제된 데이터 미리보기")
@@ -204,17 +195,30 @@ elif menu == "변환 히스토리":
     if not st.session_state['history']:
         st.info("저장된 이력이 없습니다.")
     else:
+        # 개별 삭제 기능을 위해 반복문을 역순이 아닌 인덱스로 관리
         for idx, item in enumerate(st.session_state['history']):
+            # 고유 키 생성을 위해 날짜와 인덱스 활용
             with st.expander(f"📅 {item['date']} - 📄 {item['filename']}"):
                 hist_df = pd.DataFrame(item['data'])
                 st.dataframe(hist_df, use_container_width=True)
-                ppt_from_hist = create_split_pptx(hist_df)
-                st.download_button(
-                    label=f"📥 {item['filename']} PPT 다시 받기",
-                    data=ppt_from_hist,
-                    file_name=f"RE_{item['filename'].split('.')[0]}.pptx",
-                    key=f"history_dl_{idx}"
-                )
+                
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    ppt_from_hist = create_split_pptx(hist_df)
+                    st.download_button(
+                        label=f"📥 PPT 다시 받기",
+                        data=ppt_from_hist,
+                        file_name=f"RE_{item['filename'].split('.')[0]}.pptx",
+                        key=f"dl_{idx}"
+                    )
+                with c2:
+                    # ★ 개별 삭제 버튼 추가
+                    if st.button("❌ 기록 삭제", key=f"del_{idx}"):
+                        st.session_state['history'].pop(idx)
+                        save_history_to_file(st.session_state['history'])
+                        st.rerun()
+        
+        st.divider()
         if st.sidebar.button("🗑️ 히스토리 전체 삭제"):
             if os.path.exists(HISTORY_FILE): os.remove(HISTORY_FILE)
             st.session_state['history'] = []
