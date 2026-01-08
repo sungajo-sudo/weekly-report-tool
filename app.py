@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 import gdown
 import tempfile
+import requests
 
 # --- 1. 초기 세팅 및 데이터 저장 파일 설정 ---
 st.set_page_config(page_title="Weekly Report Smart Converter", layout="wide")
@@ -51,6 +52,41 @@ def refine_text(text):
             refined_lines.append(f"• {line}")
             seen.add(line)
     return "\n".join(refined_lines) if refined_lines else "-"
+
+# --- 2-1. 구글 시트 링크 처리 함수 ---
+def download_google_sheet(sheet_url):
+    """구글 시트 링크에서 시트 ID와 GID를 추출하여 엑셀 파일로 다운로드"""
+    try:
+        # 시트 ID 추출
+        if '/spreadsheets/d/' in sheet_url:
+            sheet_id = sheet_url.split('/spreadsheets/d/')[1].split('/')[0]
+        else:
+            return None, None
+        
+        # GID 추출 (선택사항)
+        gid = None
+        if 'gid=' in sheet_url:
+            gid_part = sheet_url.split('gid=')[1]
+            gid = gid_part.split('&')[0].split('#')[0]
+        
+        # 엑셀 export URL 생성
+        if gid:
+            export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx&gid={gid}"
+        else:
+            export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+        
+        # 파일 다운로드
+        response = requests.get(export_url, timeout=30)
+        response.raise_for_status()
+        
+        # 임시 파일로 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            tmp_file.write(response.content)
+            return tmp_file.name, "google_sheet.xlsx"
+    
+    except Exception as e:
+        st.error(f"구글 시트 다운로드 오류: {e}")
+        return None, None
 
 # --- 3. 데이터 처리 로직 (엑셀/PDF 통합 개선) ---
 def process_report_data(file):
@@ -171,7 +207,7 @@ if menu == "새 보고서 만들기":
     # 파일 가져오기 방법 선택
     input_method = st.radio(
         "파일 가져오기 방법:",
-        ["로컬 파일 업로드", "구글 드라이브 링크"],
+        ["로컬 파일 업로드", "구글 드라이브 링크", "구글 시트 링크"],
         horizontal=True
     )
     
@@ -223,6 +259,30 @@ if menu == "새 보고서 만들기":
             except Exception as e:
                 st.error(f"❌ 구글 드라이브에서 파일을 가져오는 중 오류가 발생했습니다: {e}")
                 st.info("💡 링크가 '모든 사용자가 링크로 접근 가능'으로 설정되어 있는지 확인해주세요.")
+    
+    elif input_method == "구글 시트 링크":
+        sheet_link = st.text_input(
+            "구글 시트 공유 링크를 입력하세요",
+            placeholder="https://docs.google.com/spreadsheets/d/SHEET_ID/edit?gid=GID",
+            value="https://docs.google.com/spreadsheets/d/1fZ4ueBW--ZuNs_KIS8BbRIyvfow1u9ylZqlsCW3a-4U/edit?gid=1362632648#gid=1362632648"
+        )
+        
+        if sheet_link:
+            try:
+                with st.spinner("구글 시트에서 파일 다운로드 중..."):
+                    downloaded_path, downloaded_name = download_google_sheet(sheet_link)
+                    
+                    if downloaded_path:
+                        temp_file_path = downloaded_path
+                        file_name = downloaded_name
+                        file = open(temp_file_path, 'rb')
+                        st.success("✅ 구글 시트에서 파일을 성공적으로 가져왔습니다!")
+                    else:
+                        st.error("❌ 구글 시트를 다운로드할 수 없습니다.")
+                        st.info("💡 시트가 '링크가 있는 모든 사용자가 편집 가능' 또는 '링크가 있는 모든 사용자가 보기 가능'으로 설정되어 있는지 확인해주세요.")
+            except Exception as e:
+                st.error(f"❌ 구글 시트에서 파일을 가져오는 중 오류가 발생했습니다: {e}")
+                st.info("💡 시트 공유 설정을 확인해주세요.")
 
     if file:
         with st.spinner("데이터 분석 중..."):

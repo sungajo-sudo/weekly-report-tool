@@ -4,6 +4,7 @@ pdfplumber
 python-pptx
 openpyxl
 gdown
+requests
 gspread
 google-auth
 google-auth-oauthlib
