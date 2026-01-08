@@ -97,7 +97,7 @@ def create_split_pptx(df):
         table.columns[0].width, table.columns[1].width, table.columns[2].width = Inches(2.3), Inches(5.0), Inches(5.0)
 
         # 헤더 디자인
-        headers = ["프로젝트명", "이번 주 업무내용", "다음 주 업무내용"]
+        headers = ["프로젝트명", "지난 주 진행(MM월 YY주차)", "금주 계획(MM월 YY주차)"]
         for j, h in enumerate(headers):
             cell = table.cell(0, j)
             cell.text = h
