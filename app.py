@@ -53,6 +53,7 @@ def refine_text(text):
     return "\n".join(refined_lines) if refined_lines else "-"
 
 # --- 2-1. 구글 시트 링크 처리 함수 ---
+# --- 2-1. 구글 시트 링크 처리 함수 ---
 def download_google_sheet(sheet_url):
     """구글 시트 링크에서 시트 ID와 GID를 추출하여 엑셀 파일로 다운로드"""
     try:
@@ -86,6 +87,70 @@ def download_google_sheet(sheet_url):
     except Exception as e:
         st.error(f"구글 시트 다운로드 오류: {e}")
         return None, None
+
+import google.generativeai as genai
+
+# ... (omitted)
+
+# --- 2-2. AI 텍스트 개선 함수 (Gemini) ---
+def improve_text_with_ai(df, api_key):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+    except Exception as e:
+        st.error(f"Gemini 설정 오류: {e}")
+        return df
+
+    improved_data = []
+    total_rows = len(df)
+    progress_bar = st.progress(0)
+    
+    for idx, row in df.iterrows():
+        project_name = row['프로젝트명']
+        this_week = row['이번 주 업무내용']
+        next_week = row['다음 주 업무내용']
+        
+        prompt = f"""
+        당신은 주간 업무 보고서를 다듬는 비즈니스 전문가입니다.
+        
+        프로젝트명: {project_name}
+        
+        [이번 주 업무]
+        {this_week}
+        
+        [다음 주 업무]
+        {next_week}
+        
+        요청사항:
+        1. 내용 중 중복되는 항목이 있다면 하나로 합쳐주세요.
+        2. 문장을 비즈니스 보고서 스타일에 맞게 간결하고 자연스럽게 다듬어주세요.
+        3. 문장 끝은 명사형(~함, ~완료)이나 '함', '됨' 등으로 깔끔하게 처리해주세요.
+        4. 내용은 불렛 포인트(•)로 구분해서 정리해주세요.
+        5. 결과는 반드시 아래 JSON 형식으로만 답해주세요.
+        
+        {{
+            "this_week": "수정된 이번 주 업무 내용",
+            "next_week": "수정된 다음 주 업무 내용"
+        }}
+        """
+        
+        try:
+            response = model.generate_content(prompt)
+            result = json.loads(response.text)
+            
+            improved_data.append({
+                "프로젝트명": project_name,
+                "이번 주 업무내용": result.get("this_week", this_week),
+                "다음 주 업무내용": result.get("next_week", next_week)
+            })
+            
+        except Exception as e:
+            st.error(f"AI 처리 중 오류 발생 ({project_name}): {e}")
+            improved_data.append(row.to_dict())
+            
+        progress_bar.progress((idx + 1) / total_rows)
+        
+    return pd.DataFrame(improved_data)
 
 # --- 3. 데이터 처리 로직 (엑셀/PDF 통합 개선) ---
 def process_report_data(file):
@@ -198,6 +263,12 @@ def create_split_pptx(df):
 
 # --- 5. 사이드바 및 페이지 구성 ---
 st.sidebar.title("📌 메뉴")
+
+# Google AI Studio API Key 입력
+api_key = st.sidebar.text_input("Google AI Studio API Key", type="password", placeholder="AIza...")
+if not api_key:
+    st.sidebar.info("💡 Gemini 기능을 사용하려면 API Key를 입력하세요.")
+
 menu = st.sidebar.radio("이동할 페이지:", ["새 보고서 만들기", "변환 히스토리"])
 
 if menu == "새 보고서 만들기":
@@ -248,10 +319,32 @@ if menu == "새 보고서 만들기":
             final_df = process_report_data(file)
             if final_df is not None:
                 st.subheader("✅ 정제된 데이터 미리보기")
-                st.dataframe(final_df, use_container_width=True)
+                
+                # AI 개선 버튼 (세션 상태 활용)
+                if 'current_df' not in st.session_state:
+                    st.session_state['current_df'] = final_df
+                else:
+                    # 파일이 바뀌었으면 업데이트
+                    if not final_df.equals(st.session_state.get('original_df')):
+                        st.session_state['current_df'] = final_df
+                        st.session_state['original_df'] = final_df.copy()
+
+                # 여기서 session_state의 데이터를 보여줌
+                edited_df = st.data_editor(st.session_state['current_df'], use_container_width=True, num_rows="dynamic")
+                
+                if st.button("✨ Gemini로 내용 개선하기"):
+                    if not api_key:
+                        st.warning("먼저 사이드바에 Google AI Studio API Key를 입력해주세요!")
+                    else:
+                        with st.spinner("AI가 내용을 분석하고 다듬고 있습니다... (시간이 조금 걸릴 수 있습니다)"):
+                            improved_df = improve_text_with_ai(edited_df, api_key)
+                            st.session_state['current_df'] = improved_df
+                            st.rerun()
+                            
+                # PPT 생성은 현재 화면에 보이는 데이터(edited_df) 기준
+                ppt_binary = create_split_pptx(edited_df)
                 
                 col1, col2 = st.columns(2)
-                ppt_binary = create_split_pptx(final_df)
                 
                 with col1:
                     if st.button("💾 히스토리에 저장"):
